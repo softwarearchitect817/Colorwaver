@@ -1,0 +1,63 @@
+name: Release Android App
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'release-android.yml'
+      - 'android/**'
+      - 'img/**'
+      - 'patches/**'
+      - 'src/**'
+      - 'yarn.lock'
+
+jobs:
+  release:
+    name: Release Android App
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Get yarn cache directory path
+        id: yarn-cache-dir-path
+        run: echo "::set-output name=dir::$(yarn cache dir)"
+      - name: Restore node_modules from cache
+        uses: actions/cache@v2
+        id: yarn-cache
+        with:
+          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+      - name: Install node_modules
+        run: yarn install --frozen-lockfile --cwd ..
+
+      - name: Restore buildcache
+        uses: mikehardy/buildcache-action@v1
+        continue-on-error: true
+
+      - name: Setup Ruby (bundle)
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 2.6
+          bundler-cache: true
+          working-directory: android
+
+      - name: Create Google Service Account JSON
+        run: 'echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" > /tmp/secret.json'
+        shell: bash
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON : ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+
+      - name: Run fastlane (Google Play)
+        if: |
+          contains(github.event.head_commit.message, 'new-release')
+        run: bundle exec fastlane release
+      - name: Run fastlane (Google Play Internal)
+        if: |
+          !contains(github.event.head_commit.message, 'new-release')
+        run: bundle exec fastlane beta

@@ -1,0 +1,86 @@
+name: Release iOS App
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'release-ios.yml'
+      - 'ios/**'
+      - 'img/**'
+      - 'patches/**'
+      - 'src/**'
+      - 'yarn.lock'
+
+jobs:
+  release:
+    name: Release iOS App
+    runs-on: macOS-latest
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Get yarn cache directory path
+        id: yarn-cache-dir-path
+        run: echo "::set-output name=dir::$(yarn cache dir)"
+      - name: Restore node_modules from cache
+        uses: actions/cache@v2
+        id: yarn-cache
+        with:
+          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+      - name: Install node_modules
+        run: yarn install --frozen-lockfile --cwd ..
+
+      - name: Restore buildcache
+        uses: mikehardy/buildcache-action@v1
+        continue-on-error: true
+
+      - name: Setup Ruby (bundle)
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 2.6
+          bundler-cache: true
+          working-directory: ios
+
+      - name: Restore Pods cache
+        uses: actions/cache@v2
+        with:
+          path: |
+            ios/Pods
+            Pods
+            ~/Library/Caches/CocoaPods
+            ~/.cocoapods
+          key: ${{ runner.os }}-pods-${{ hashFiles('**/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pods-
+      - name: Install Pods
+        run: bundle exec pod check || bundle exec pod install
+
+      - name: Set up keychain
+        run: bundle exec fastlane run create_keychain name:keychain_temp password:123 unlock:true default_keychain:true lock_when_sleeps:false timeout:0
+        # We need to have access to the git repository where the certs and profiles are stored:
+      - name: Install SSH key
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.SSH_KEY }}
+          known_hosts: ${{ secrets.KNOWN_HOSTS }}
+      - name: Install profiles
+        run: bundle exec fastlane match adhoc --readonly && bundle exec fastlane match development --readonly
+        env:
+          MATCH_KEYCHAIN_NAME: 'keychain_temp'
+          MATCH_KEYCHAIN_PASSWORD: '123'
+          MATCH_PASSWORD: ${{ secrets.FASTLANE_MATCH_PASSWORD }}
+
+      - name: Run fastlane (AppStore)
+        if: |
+          contains(github.event.head_commit.message, 'new-release')
+        run: bundle exec fastlane release
+      - name: Run fastlane (TestFlight)
+        if: |
+          !contains(github.event.head_commit.message, 'new-release')
+        run: bundle exec fastlane beta
